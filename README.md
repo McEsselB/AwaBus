@@ -1,12 +1,14 @@
-# AwaBus
+# 🚌 AwaBus
 
 > **Geofence-Triggered Automated Proximity Alert and Communication System for School Transport in Ghana**
 
 A school bus proximity alert system purpose-built for the Ghanaian school transport ecosystem. When a school bus enters a configurable radius around a child's drop-off point, AwaBus automatically triggers a voice call (robocall) to the parent — no smartphone, no data connection, no app required on the parent's end.
 
+Parents can interact with the system through **whichever interface suits them best** — a React Native mobile app or a browser-based PWA. Both connect to the same backend and share the same real-time data. Parents on basic phones are covered entirely by the IVR dial-in channel.
+
 ---
 
-## Table of Contents
+## 📋 Table of Contents
 
 - [Overview](#overview)
 - [Key Features](#key-features)
@@ -29,30 +31,39 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 
 **AwaBus automates the entire pipeline:**
 
-1. Driver opens the app and initiates a trip with one tap
+1. Driver opens the Android app and initiates a trip with one tap
 2. The app streams GPS coordinates to the backend in real time via a foreground service
 3. The backend runs a Haversine geofence check against every active student's drop-off coordinates on each GPS ping
 4. When the bus enters the 500m radius, an automated voice call fires to the parent (or secondary receiver)
 5. If the call fails, an SMS fallback is dispatched immediately
-6. Parents without smartphones can dial the school's IVR line to cancel their ward's seat or be bridged directly to the driver — using only a basic phone call
+6. Parents manage attendance and preferences via the **React Native parent app** or the **browser-based PWA** — both are fully supported and share the same live data
+7. Parents without smartphones can dial the school's IVR line to cancel their ward's seat or be bridged directly to the driver — using only a basic phone call
 
 ---
 
 ## Key Features
 
-### Driver Android App
+### 🚗 Driver Android App
 - Foreground GPS service that streams continuously even when phone is locked
 - Dynamic student attendance list filtered per active trip
 - One-tap trip initiation and completion
 - Delay broadcast: notify all parents on the route via bulk SMS/voice with a single tap
 
-### Parent PWA (Progressive Web App)
-- Works on any browser — no app store download required
+### 📱 Parent Mobile App (React Native / Expo)
+- Native Android and iOS app for smartphone-using parents
 - Toggle ward attendance per session (with cutoff deadline enforcement)
 - Designate a secondary receiver (neighbour, caregiver, sibling) with session-scoped expiry
-- Real-time ward status: On Bus → Alert Sent → Dropped Off
+- Real-time ward status updates via Socket.io: On Bus → Alert Sent → Dropped Off
+- Push notification support for proximity alerts
+- No GPS permissions required — location is never collected from parents
 
-### IVR Inbound Channel
+### 🌐 Parent PWA (Progressive Web App)
+- Browser-based alternative — works on any device, no app install required
+- Identical feature set to the mobile app: attendance toggle, secondary receiver, ward status
+- Offline-capable via service worker (ward status cached locally)
+- Same backend, same real-time data — parents can switch between app and PWA freely
+
+### 📞 IVR Inbound Channel
 - Dedicated school dial-in number powered by Arkesel
 - Caller ID recognition: registered parents are greeted by ward name automatically
 - Unrecognised numbers prompted for a 4-digit PIN
@@ -60,13 +71,13 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 - **Press 2** → bridge call directly to driver/attendant
 - Cancellation deadline enforcement with recorded voice rejection after cutoff
 
-### Geofence Engine (Backend)
+### 🗺️ Geofence Engine (Backend)
 - Haversine formula computed server-side on every GPS ping — no external mapping library
 - Per-student geofence with configurable radius (default: 500m)
 - One-time alert trigger per student per trip (no duplicate calls)
 - Secondary receiver logic: if a secondary receiver is set, voice call goes to them; SMS confirmation goes to primary parent
 
-### Admin Dashboard
+### 🛠️ Admin Dashboard
 - Full CRUD: Students, Drivers, Buses, Route Assignments
 - Student-to-driver mapping
 - System activity and communication log viewer
@@ -76,34 +87,43 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 ## System Architecture
 
 ```
-┌─────────────────────┐         GPS Pings (REST)        ┌──────────────────────────┐
-│  Driver Android App  │ ──────────────────────────────▶ │                          │
-│  (React Native/Expo) │                                  │   Node.js / Express.js   │
-└─────────────────────┘                                  │       Backend API         │
-                                                         │                          │
-┌─────────────────────┐         REST + WebSocket         │  ┌────────────────────┐  │
-│   Parent PWA         │ ◀──────────────────────────────▶│  │  Geofence Engine   │  │
-│   (React.js)         │                                  │  │  (Haversine calc)  │  │
-└─────────────────────┘                                  │  └────────────────────┘  │
-                                                         │           │               │
-┌─────────────────────┐         REST                     │           ▼               │
-│   Admin Dashboard    │ ◀──────────────────────────────▶│  ┌────────────────────┐  │
-│   (React.js)         │                                  │  │ Communication      │  │
-└─────────────────────┘                                  │  │ Engine             │  │
-                                                         │  └──────────┬─────────┘  │
-┌─────────────────────┐         Webhook (IVR events)     │             │             │
-│   Arkesel IVR        │ ──────────────────────────────▶ │  ┌──────────▼─────────┐  │
-│   (Inbound calls)    │                                  │  │  IVR Webhook       │  │
-└─────────────────────┘                                  │  │  Handler           │  │
-                                                         │  └────────────────────┘  │
-┌─────────────────────┐         API Calls                └──────────────────────────┘
-│   Arkesel API        │ ◀────────────────────────────────────────────────────────────
-│ (Voice / SMS / IVR)  │                                            │
-└─────────────────────┘                                             ▼
-                                                         ┌──────────────────────────┐
-                                                         │       MongoDB Atlas       │
-                                                         │   (Mongoose ODM)          │
-                                                         └──────────────────────────┘
+┌─────────────────────┐    GPS Pings (REST)     ┌──────────────────────────────────┐
+│  Driver Android App  │ ──────────────────────▶ │                                  │
+│  (React Native/Expo) │                          │     Node.js / Express.js         │
+└─────────────────────┘                          │         Backend API               │
+                                                 │                                  │
+┌─────────────────────┐    REST + WebSocket      │   ┌────────────────────────┐     │
+│  Parent Mobile App   │ ◀───────────────────────▶   │   Geofence Engine      │     │
+│  (React Native/Expo) │                          │   │   (Haversine calc)     │     │
+└─────────────────────┘                          │   └───────────┬────────────┘     │
+                                                 │               │                  │
+┌─────────────────────┐    REST + WebSocket      │               ▼                  │
+│   Parent PWA         │ ◀───────────────────────▶   ┌────────────────────────┐     │
+│   (React.js)         │                          │   │  Communication Engine  │     │
+└─────────────────────┘                          │   │  Voice → SMS fallback  │     │
+                                                 │   └───────────┬────────────┘     │
+┌─────────────────────┐    REST                  │               │                  │
+│   Admin Dashboard    │ ◀───────────────────────▶   ┌───────────▼────────────┐     │
+│   (React.js)         │                          │   │   IVR Webhook Handler  │     │
+└─────────────────────┘                          │   └────────────────────────┘     │
+                                                 │                                  │
+┌─────────────────────┐    Webhook (IVR events)  └──────────────────────────────────┘
+│   Arkesel IVR        │ ──────────────────────▶               │
+│   (Inbound calls)    │                                        ▼
+└─────────────────────┘                          ┌──────────────────────────────────┐
+                                                 │          MongoDB Atlas            │
+┌─────────────────────┐    API Calls             │         (Mongoose ODM)            │
+│   Arkesel API        │ ◀─────────────────────  └──────────────────────────────────┘
+│ (Voice / SMS / IVR)  │
+└─────────────────────┘
+
+         ┌─────────────────────────────────────────────────────────┐
+         │              Shared Backend — One Source of Truth         │
+         │  Parent Mobile App and Parent PWA connect to the same    │
+         │  API, same MongoDB, same Socket.io events. A parent can  │
+         │  toggle attendance on the PWA and see it instantly on    │
+         │  the app — and vice versa.                               │
+         └─────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -113,7 +133,8 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 | Layer | Technology |
 |---|---|
 | Driver Mobile App | React Native (Expo), `expo-location`, `expo-task-manager` |
-| Parent & Admin UI | React.js (Vite), PWA (service worker + web app manifest) |
+| Parent Mobile App | React Native (Expo) — separate Expo project, no GPS permissions |
+| Parent & Admin Web | React.js (Vite), PWA (service worker + web app manifest) |
 | Backend API | Node.js, Express.js |
 | Database | MongoDB Atlas (Mongoose ODM) |
 | Real-time | Socket.io |
@@ -121,7 +142,7 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 | Geofence Logic | Haversine formula (pure Node.js) |
 | Authentication | JWT (stateless), bcrypt (passwords + IVR PINs) |
 | Testing | Jest, Supertest |
-| Hosting | Railway (backend), Vercel (frontend PWA), MongoDB Atlas (DB) |
+| Hosting | Railway (backend), Vercel (PWA), Expo EAS (mobile apps), MongoDB Atlas (DB) |
 | Design | Figma |
 | Version Control | Git, GitHub |
 
@@ -165,7 +186,7 @@ awabus/
 │   ├── app.js
 │   └── server.js
 │
-├── client-driver/                 # React Native (Expo) — Android only
+├── client-driver/                 # React Native (Expo) — Driver app, Android only
 │   ├── app/
 │   │   ├── (auth)/
 │   │   │   └── login.jsx
@@ -177,12 +198,25 @@ awabus/
 │   ├── services/
 │   │   ├── gpsService.js          # expo-location foreground service
 │   │   └── api.js
-│   └── app.json
+│   └── app.json                   # Requests foreground location permissions
 │
-├── client-web/                    # React.js PWA — Parent & Admin
+├── client-parent/                 # React Native (Expo) — Parent mobile app
+│   ├── app/
+│   │   ├── (auth)/
+│   │   │   └── login.jsx
+│   │   ├── (home)/
+│   │   │   ├── dashboard.jsx      # Ward status: On Bus / Alert Sent / Dropped Off
+│   │   │   ├── attendance.jsx     # Toggle ward attendance for session
+│   │   │   └── secondary-receiver.jsx  # Set temp alternate contact
+│   │   └── _layout.jsx
+│   ├── services/
+│   │   └── api.js                 # Same API calls as PWA — shared endpoint contracts
+│   └── app.json                   # No location permissions required
+│
+├── client-web/                    # React.js PWA — Parent (browser) & Admin Dashboard
 │   ├── public/
 │   │   ├── manifest.json          # PWA manifest
-│   │   └── sw.js                  # Service worker
+│   │   └── sw.js                  # Service worker (offline ward status cache)
 │   ├── src/
 │   │   ├── pages/
 │   │   │   ├── parent/
@@ -216,7 +250,7 @@ awabus/
 - Node.js v18+
 - MongoDB Atlas account (free tier works)
 - Arkesel API account (for voice, SMS, and IVR)
-- Android device or emulator (for driver app)
+- Android device or emulator (for driver and parent apps)
 - Expo CLI: `npm install -g expo-cli`
 
 ### 1. Clone the Repository
@@ -253,6 +287,18 @@ npx expo start
 # Scan QR code with Expo Go on your Android device
 ```
 
+### 5. Set Up the Parent Mobile App
+
+```bash
+cd client-parent
+npm install
+npx expo start
+# Scan QR code with Expo Go on your Android device
+# Uses the same backend as the PWA — log in with the same parent credentials
+```
+
+> **Note:** The parent mobile app and the parent PWA share the same backend API and database. A parent can toggle attendance on the PWA and the change reflects instantly in the mobile app via Socket.io — and vice versa.
+
 ---
 
 ## Environment Variables
@@ -286,8 +332,9 @@ HUBTEL_SENDER_ID=AwaBus
 DEFAULT_GEOFENCE_RADIUS_METRES=500
 GPS_PING_INTERVAL_SECONDS=10
 
-# Frontend URL (for CORS)
-CLIENT_URL=http://localhost:5173
+# Frontend URLs (for CORS — all three accepted)
+CLIENT_WEB_URL=http://localhost:5173
+CLIENT_PARENT_APP_URL=exp://localhost:8082
 ```
 
 ---
@@ -431,7 +478,7 @@ npm test
 | IVR webhook routing (press-1, press-2, post-deadline) | Integration test | Supertest |
 | Full end-to-end workflow | System test | Manual |
 | Geofence accuracy at 200m–800m | Accuracy test | Mock GPS coords |
-| Driver app, Parent PWA, Admin dashboard | Usability study | SUS questionnaire |
+| Driver app, Parent PWA, Parent mobile app, Admin dashboard | Usability study | SUS questionnaire |
 
 ### Geofence Accuracy Test Coordinates
 
@@ -455,6 +502,8 @@ Simulated distances from a fixed test student home coordinate:
 |---|---|---|
 | Backend API | Railway | Free tier for prototype |
 | Parent + Admin PWA | Vercel | Free tier |
+| Driver Android App | Expo EAS Build | APK for direct install during testing |
+| Parent Android App | Expo EAS Build | APK for direct install during testing |
 | MongoDB | MongoDB Atlas | Free M0 cluster |
 | IVR + Voice + SMS | Arkesel | Paid per API credit |
 
@@ -469,11 +518,23 @@ railway init
 railway up
 ```
 
-### Deploy Frontend to Vercel
+### Deploy Frontend PWA to Vercel
 
 ```bash
 cd client-web
 npx vercel --prod
+```
+
+### Build Android APKs via Expo EAS
+
+```bash
+# Driver app
+cd client-driver
+npx eas build --platform android --profile preview
+
+# Parent app
+cd client-parent
+npx eas build --platform android --profile preview
 ```
 
 ---
