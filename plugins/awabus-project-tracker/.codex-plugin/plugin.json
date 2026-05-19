@@ -1,0 +1,42 @@
+{
+  "name": "awabus-project-tracker",
+  "version": "0.1.0",
+  "description": "Project tracking workflows for the AwaBus school transport alert system.",
+  "author": {
+    "name": "AwaBus Team",
+    "email": "TODO@example.com",
+    "url": "https://github.com/your-org/awabus"
+  },
+  "homepage": "https://github.com/your-org/awabus",
+  "repository": "https://github.com/your-org/awabus",
+  "license": "MIT",
+  "keywords": [
+    "awabus",
+    "project-tracking",
+    "school-transport",
+    "ghana",
+    "geofence"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "AwaBus Project Tracker",
+    "shortDescription": "Track AwaBus milestones, risks, decisions, and next actions.",
+    "longDescription": "A repo-local Codex plugin for keeping the AwaBus final-year project organized across backend, mobile, PWA, IVR, admin, testing, deployment, documentation, and presentation work.",
+    "developerName": "AwaBus Team",
+    "category": "Productivity",
+    "capabilities": [
+      "Project Tracking",
+      "Planning",
+      "Documentation"
+    ],
+    "websiteURL": "https://github.com/your-org/awabus",
+    "privacyPolicyURL": "https://github.com/your-org/awabus",
+    "termsOfServiceURL": "https://github.com/your-org/awabus",
+    "defaultPrompt": [
+      "Track AwaBus project progress.",
+      "Create an AwaBus sprint plan.",
+      "Summarize AwaBus risks and blockers."
+    ],
+    "brandColor": "#16A34A"
+  }
+}
