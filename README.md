@@ -4,7 +4,7 @@
 
 A school bus proximity alert system purpose-built for the Ghanaian school transport ecosystem. When a school bus enters a configurable radius around a child's drop-off point, AwaBus automatically triggers a voice call (robocall) to the parent — no smartphone, no data connection, no app required on the parent's end.
 
-Parents can interact with the system through **whichever interface suits them best** — a React Native mobile app or a browser-based PWA. Both connect to the same backend and share the same real-time data. Parents on basic phones are covered entirely by the IVR dial-in channel.
+The system is built around three components: a **React Native Driver Android App**, a **React.js Admin Web Portal**, and an **Arkesel IVR telephony channel** as the exclusive parent interface. Parents on any phone — basic or smart — are fully served by the IVR dial-in channel for both inbound actions and outbound alerts.
 
 ---
 
@@ -32,98 +32,106 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 **AwaBus automates the entire pipeline:**
 
 1. Driver opens the Android app and initiates a trip with one tap
-2. The app streams GPS coordinates to the backend in real time via a foreground service
+2. The app streams GPS coordinates to the backend every 10 seconds via a background foreground service
 3. The backend runs a Haversine geofence check against every active student's drop-off coordinates on each GPS ping
-4. When the bus enters the 500m radius, an automated voice call fires to the parent (or secondary receiver)
-5. If the call fails, an SMS fallback is dispatched immediately
-6. Parents manage attendance and preferences via the **React Native parent app** or the **browser-based PWA** — both are fully supported and share the same live data
-7. Parents without smartphones can dial the school's IVR line to cancel their ward's seat or be bridged directly to the driver — using only a basic phone call
+4. When the bus enters the configured radius, an automated voice call fires to the parent (or secondary receiver) via Arkesel
+5. If the call fails, an SMS fallback is dispatched immediately; if that fails, Hubtel is used as a second-level fallback
+6. Parents manage attendance and connect to drivers exclusively via the **Arkesel IVR inbound channel** — a single phone call, no smartphone required
+7. Admins configure the entire system — users, buses, students, geofence coordinates — through the **Admin Web Portal**
+
+> **Scope Note:** This architecture removes the parent mobile app (React Native) and parent PWA in favour of the IVR telephony channel as the sole parent interface. The Admin Portal and Driver App are unchanged in scope.
 
 ---
 
 ## Key Features
 
-### 🚗 Driver Android App
-- Foreground GPS service that streams continuously even when phone is locked
-- Dynamic student attendance list filtered per active trip
-- One-tap trip initiation and completion
-- Delay broadcast: notify all parents on the route via bulk SMS/voice with a single tap
-
-### 📱 Parent Mobile App (React Native / Expo)
-- Native Android and iOS app for smartphone-using parents
-- Toggle ward attendance per session (with cutoff deadline enforcement)
-- Designate a secondary receiver (neighbour, caregiver, sibling) with session-scoped expiry
-- Real-time ward status updates via Socket.io: On Bus → Alert Sent → Dropped Off
-- Push notification support for proximity alerts
-- No GPS permissions required — location is never collected from parents
-
-### 🌐 Parent PWA (Progressive Web App)
-- Browser-based alternative — works on any device, no app install required
-- Identical feature set to the mobile app: attendance toggle, secondary receiver, ward status
-- Offline-capable via service worker (ward status cached locally)
-- Same backend, same real-time data — parents can switch between app and PWA freely
-
-### 📞 IVR Inbound Channel
-- Dedicated school dial-in number powered by Arkesel
-- Caller ID recognition: registered parents are greeted by ward name automatically
-- Unrecognised numbers prompted for a 4-digit PIN
-- **Press 1** → cancel ward's bus seat for the session
-- **Press 2** → bridge call directly to driver/attendant
-- Cancellation deadline enforcement with recorded voice rejection after cutoff
-
 ### 🗺️ Geofence Engine (Backend)
 - Haversine formula computed server-side on every GPS ping — no external mapping library
-- Per-student geofence with configurable radius (default: 500m)
-- One-time alert trigger per student per trip (no duplicate calls)
-- Secondary receiver logic: if a secondary receiver is set, voice call goes to them; SMS confirmation goes to primary parent
+- Per-student configurable geofence radius (100m–2000m; default 500m)
+- Inclusive boundary trigger: student exactly at the radius boundary receives an alert
+- One-time alert trigger per student per trip (write-once `alertTriggered` flag, never reversed)
+- Secondary receiver logic: if an active secondary receiver is set for a parent, the voice call routes to them instead; SMS confirmation goes to the primary parent
 
-### 🛠️ Admin Dashboard
-- Full CRUD: Students, Drivers, Buses, Route Assignments
-- Student-to-driver mapping
-- System activity and communication log viewer
+### 🚗 Driver Android App
+- Background GPS foreground service (`expo-task-manager`) that streams continuously even when the phone is locked or the app is minimised
+- Dynamic student attendance checklist per active trip (Pending / Alert Sent / Dropped Off)
+- One-tap trip initiation and completion with pre/post-trip confirmation prompts
+- Live GPS status display: current coordinates, last ping timestamp, connectivity indicator
+- Offline ping queue: up to 60 pings (10 minutes) cached locally and replayed in order on reconnect
+- Delay broadcast: notify all attending parents on the route via SMS with a single tap
+
+### 🖥️ Admin Web Portal
+- Full CRUD: Users (Admins, Drivers, Parents), Buses, Students
+- Student Geospatial Mapping: Leaflet.js interactive map with drag-and-drop pin placement, geofence circle overlay, per-driver colour filtering
+- Driver–Bus assignment with bidirectional reference updates
+- Activity & Communication Log: paginated, filterable audit trail of every system event (voice calls, SMS, IVR interactions)
+- Real-time Socket.io updates: live log entries and critical failure alerts
+
+### 📞 IVR Inbound Channel (Exclusive Parent Interface)
+- Dedicated school dial-in number powered by Arkesel
+- Caller ID recognition: registered parents are greeted by ward name automatically
+- Unrecognised numbers prompted to enter their registered phone number and 4-digit PIN
+- **Press 1** → cancel ward's bus seat for today (blocked after 06:30 AM Ghana Standard Time)
+- **Press 2** → bridge call directly to the driver; automatic fallback message if driver unreachable within 30 seconds
+- Multi-student support: parents with multiple wards on different routes are prompted to select a student first
+- PIN security: bcrypt-hashed 4-digit PIN; maximum 3 attempts per IVR session before disconnection
+- All webhook events validated via `X-Arkesel-Signature` shared secret
+
+### 📣 Outbound Voice & SMS
+- Arkesel Voice API for proximity alerts with automatic Arkesel SMS fallback
+- Hubtel SMS as second-level fallback if Arkesel SMS fails
+- Delay broadcast to all attending parents with deduplication (parent with multiple children on the same route receives one message, not two)
+- `Promise.allSettled` async dispatch — driver's request returns immediately with a queued confirmation
 
 ---
 
 ## System Architecture
 
 ```
-┌─────────────────────┐    GPS Pings (REST)     ┌──────────────────────────────────┐
-│  Driver Android App  │ ──────────────────────▶ │                                  │
-│  (React Native/Expo) │                          │     Node.js / Express.js         │
-└─────────────────────┘                          │         Backend API               │
-                                                 │                                  │
-┌─────────────────────┐    REST + WebSocket      │   ┌────────────────────────┐     │
-│  Parent Mobile App   │ ◀───────────────────────▶   │   Geofence Engine      │     │
-│  (React Native/Expo) │                          │   │   (Haversine calc)     │     │
-└─────────────────────┘                          │   └───────────┬────────────┘     │
-                                                 │               │                  │
-┌─────────────────────┐    REST + WebSocket      │               ▼                  │
-│   Parent PWA         │ ◀───────────────────────▶   ┌────────────────────────┐     │
-│   (React.js)         │                          │   │  Communication Engine  │     │
-└─────────────────────┘                          │   │  Voice → SMS fallback  │     │
-                                                 │   └───────────┬────────────┘     │
-┌─────────────────────┐    REST                  │               │                  │
-│   Admin Dashboard    │ ◀───────────────────────▶   ┌───────────▼────────────┐     │
-│   (React.js)         │                          │   │   IVR Webhook Handler  │     │
-└─────────────────────┘                          │   └────────────────────────┘     │
-                                                 │                                  │
-┌─────────────────────┐    Webhook (IVR events)  └──────────────────────────────────┘
-│   Arkesel IVR        │ ──────────────────────▶               │
-│   (Inbound calls)    │                                        ▼
-└─────────────────────┘                          ┌──────────────────────────────────┐
-                                                 │          MongoDB Atlas            │
-┌─────────────────────┐    API Calls             │         (Mongoose ODM)            │
-│   Arkesel API        │ ◀─────────────────────  └──────────────────────────────────┘
-│ (Voice / SMS / IVR)  │
-└─────────────────────┘
+┌──────────────────────┐    GPS Pings (REST)      ┌──────────────────────────────────────┐
+│  Driver Android App   │ ────────────────────────▶│                                      │
+│  (React Native/Expo)  │                          │      Node.js / Express.js            │
+└──────────────────────┘                          │          Backend API                  │
+                                                  │                                      │
+┌──────────────────────┐    REST + WebSocket       │   ┌──────────────────────────────┐  │
+│   Admin Web Portal    │ ◀──────────────────────▶ │   │      Geofence Engine         │  │
+│   (React.js / Vite)   │                          │   │      (Haversine calc)        │  │
+└──────────────────────┘                          │   └──────────────┬───────────────┘  │
+                                                  │                  │                   │
+                                                  │                  ▼                   │
+                                                  │   ┌──────────────────────────────┐  │
+                                                  │   │    Communication Engine      │  │
+                                                  │   │  Voice → SMS → Hubtel        │  │
+                                                  │   └──────────────┬───────────────┘  │
+                                                  │                  │                   │
+                                                  │                  ▼                   │
+                                                  │   ┌──────────────────────────────┐  │
+                                                  │   │     IVR Webhook Handler      │  │
+                                                  │   │  /inbound · /dtmf · /callback│  │
+                                                  │   └──────────────────────────────┘  │
+                                                  │                                      │
+┌──────────────────────┐    Webhook (IVR events)  └──────────────────┬───────────────────┘
+│   Arkesel IVR         │ ────────────────────────▶                  │
+│ (Inbound calls)       │                                             ▼
+└──────────────────────┘                          ┌──────────────────────────────────────┐
+                                                  │           MongoDB Atlas               │
+┌──────────────────────┐    API Calls             │          (Mongoose ODM)               │
+│   Arkesel API         │ ◀──────────────────────  └──────────────────────────────────────┘
+│ (Voice / SMS / IVR)   │
+└──────────────────────┘
 
-         ┌─────────────────────────────────────────────────────────┐
-         │              Shared Backend — One Source of Truth         │
-         │  Parent Mobile App and Parent PWA connect to the same    │
-         │  API, same MongoDB, same Socket.io events. A parent can  │
-         │  toggle attendance on the PWA and see it instantly on    │
-         │  the app — and vice versa.                               │
-         └─────────────────────────────────────────────────────────┘
+┌──────────────────────┐    SMS Fallback
+│   Hubtel API          │ ◀──────────────────────
+│ (SMS second-level)    │
+└──────────────────────┘
+
+         ┌──────────────────────────────────────────────────────────────────┐
+         │                  Parent Interface — IVR Only                      │
+         │  Parents have NO app and NO web interface. They interact with     │
+         │  AwaBus exclusively through outbound voice calls and SMS (system  │
+         │  → parent) and inbound IVR calls (parent → system). Any phone     │
+         │  — basic or smart — is fully supported.                           │
+         └──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -133,16 +141,17 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 | Layer | Technology |
 |---|---|
 | Driver Mobile App | React Native (Expo), `expo-location`, `expo-task-manager` |
-| Parent Mobile App | React Native (Expo) — separate Expo project, no GPS permissions |
-| Parent & Admin Web | React.js (Vite), PWA (service worker + web app manifest) |
+| Admin Web Portal | React.js (Vite) |
 | Backend API | Node.js, Express.js |
 | Database | MongoDB Atlas (Mongoose ODM) |
-| Real-time | Socket.io |
-| Communication | Arkesel API (Voice Call, SMS, IVR), Hubtel (fallback) |
+| Real-time | Socket.io (driver app + admin portal only) |
+| Map (Admin) | Leaflet.js + OpenStreetMap (no paid APIs) |
+| Communication | Arkesel API (Voice Call, SMS, IVR); Hubtel (SMS second-level fallback) |
 | Geofence Logic | Haversine formula (pure Node.js) |
 | Authentication | JWT (stateless), bcrypt (passwords + IVR PINs) |
+| Rate Limiting | express-rate-limit |
 | Testing | Jest, Supertest |
-| Hosting | Railway (backend), Vercel (PWA), Expo EAS (mobile apps), MongoDB Atlas (DB) |
+| Hosting | Railway (backend), Vercel (admin portal), Expo EAS (driver app), MongoDB Atlas (DB) |
 | Design | Figma |
 | Version Control | Git, GitHub |
 
@@ -152,83 +161,72 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 
 ```
 awabus/
-├── server/                        # Node.js / Express backend
+├── server/                         # Node.js / Express backend
 │   ├── config/
-│   │   ├── db.js                  # MongoDB connection
-│   │   └── arkesel.js             # Arkesel API config
+│   │   ├── db.js                   # MongoDB connection
+│   │   └── arkesel.js              # Arkesel API config
 │   ├── models/
-│   │   ├── User.js                # Roles: driver | parent | admin
-│   │   ├── Student.js             # Home coords, parent ref, driver ref
-│   │   ├── Trip.js                # Status: Idle | Active | Completed
-│   │   ├── TripStudent.js         # Per-student alert state per trip
-│   │   ├── SecondaryReceiver.js   # Temp alternate contact with expiry
-│   │   └── CommunicationLog.js    # Voice/SMS/IVR event records
+│   │   ├── User.js                 # Roles: driver | parent | admin
+│   │   ├── Bus.js                  # Bus registration + driver assignment
+│   │   ├── Student.js              # Home coords, geofence radius, parent + driver refs
+│   │   ├── Trip.js                 # Status: Active | Completed; delayBroadcastLog
+│   │   ├── TripStudent.js          # Per-student alert state per trip; write-once alertTriggered
+│   │   ├── DailyAttendance.js      # IVR attendance cancellations; unique (studentId + date)
+│   │   ├── SecondaryReceiver.js    # Temp alternate contact with TTL expiry
+│   │   ├── CommunicationLog.js     # Append-only voice/SMS/IVR event records
+│   │   ├── AuthLog.js              # Login + IVR PIN attempt audit log
+│   │   └── PasswordReset.js        # OTP documents with TTL index
 │   ├── routes/
-│   │   ├── auth.js                # Register, login, refresh
-│   │   ├── trips.js               # Trip initiation, GPS ping endpoint
-│   │   ├── students.js            # CRUD (admin)
-│   │   ├── drivers.js             # CRUD (admin)
-│   │   ├── parents.js             # Attendance toggle, secondary receiver
-│   │   ├── ivr.js                 # Arkesel IVR webhook handler
-│   │   └── broadcast.js           # Delay broadcast endpoint
+│   │   ├── auth.js                 # Register, login, refresh, OTP forgot-password, reset
+│   │   ├── trips.js                # Trip start, GPS ping, end, broadcast
+│   │   ├── students.js             # CRUD (admin); geospatial update
+│   │   ├── drivers.js              # Driver route + student list
+│   │   ├── buses.js                # Bus CRUD + driver assignment
+│   │   ├── users.js                # Admin user management (suspend, delete, edit)
+│   │   ├── ivr.js                  # Arkesel IVR webhook: /inbound, /dtmf, /voice-callback
+│   │   ├── broadcast.js            # Delay broadcast endpoint
+│   │   └── logs.js                 # GET /api/logs with filter params
 │   ├── middleware/
-│   │   ├── auth.js                # JWT verify middleware
-│   │   └── rbac.js                # Role-based access control
+│   │   ├── auth.js                 # JWT verify + passwordChangedAt invalidation
+│   │   ├── rbac.js                 # Role-based access control
+│   │   └── ivrSignature.js         # X-Arkesel-Signature webhook validation
 │   ├── services/
-│   │   ├── geofenceEngine.js      # Haversine + threshold logic
-│   │   ├── communicationEngine.js # Voice call → SMS fallback logic
-│   │   ├── ivrService.js          # Caller ID lookup, PIN verify, DTMF routing
-│   │   └── broadcastService.js    # Bulk notify all parents on route
+│   │   ├── geofenceEngine.js       # Haversine + threshold logic; alert trigger orchestration
+│   │   ├── communicationEngine.js  # Voice call → Arkesel SMS → Hubtel SMS fallback chain
+│   │   ├── ivrService.js           # Caller ID lookup, PIN verify, DTMF routing, Arkesel responses
+│   │   └── broadcastService.js     # Bulk SMS with deduplication + Promise.allSettled dispatch
 │   ├── utils/
-│   │   └── haversine.js           # Pure Haversine distance calculation
+│   │   └── haversine.js            # Pure Haversine distance calculation (returns metres)
 │   ├── socket/
-│   │   └── index.js               # Socket.io event handlers
+│   │   └── index.js                # Socket.io rooms: driver:<id>, admin
 │   ├── app.js
 │   └── server.js
 │
-├── client-driver/                 # React Native (Expo) — Driver app, Android only
+├── client-driver/                  # React Native (Expo) — Driver app, Android only
 │   ├── app/
 │   │   ├── (auth)/
 │   │   │   └── login.jsx
 │   │   ├── (trip)/
-│   │   │   ├── attendance.jsx     # Active student list
-│   │   │   ├── active-trip.jsx    # Live trip view
-│   │   │   └── delay-broadcast.jsx
+│   │   │   ├── dashboard.jsx       # Pre-trip home: student list, start button
+│   │   │   ├── active-trip.jsx     # Live checklist, GPS status, end/broadcast buttons
+│   │   │   └── delay-broadcast.jsx # Broadcast composition + send confirmation
 │   │   └── _layout.jsx
 │   ├── services/
-│   │   ├── gpsService.js          # expo-location foreground service
+│   │   ├── gpsService.js           # expo-task-manager background location task
+│   │   ├── pingQueue.js            # Offline ping queue (max 60; replay on reconnect)
 │   │   └── api.js
-│   └── app.json                   # Requests foreground location permissions
+│   └── app.json                    # Requests foreground + background location permissions
 │
-├── client-parent/                 # React Native (Expo) — Parent mobile app
-│   ├── app/
-│   │   ├── (auth)/
-│   │   │   └── login.jsx
-│   │   ├── (home)/
-│   │   │   ├── dashboard.jsx      # Ward status: On Bus / Alert Sent / Dropped Off
-│   │   │   ├── attendance.jsx     # Toggle ward attendance for session
-│   │   │   └── secondary-receiver.jsx  # Set temp alternate contact
-│   │   └── _layout.jsx
-│   ├── services/
-│   │   └── api.js                 # Same API calls as PWA — shared endpoint contracts
-│   └── app.json                   # No location permissions required
-│
-├── client-web/                    # React.js PWA — Parent (browser) & Admin Dashboard
-│   ├── public/
-│   │   ├── manifest.json          # PWA manifest
-│   │   └── sw.js                  # Service worker (offline ward status cache)
+├── client-web/                     # React.js — Admin Web Portal
 │   ├── src/
 │   │   ├── pages/
-│   │   │   ├── parent/
-│   │   │   │   ├── Dashboard.jsx       # Ward status display
-│   │   │   │   ├── Attendance.jsx      # Toggle attendance per ward
-│   │   │   │   └── SecondaryReceiver.jsx
 │   │   │   └── admin/
-│   │   │       ├── Students.jsx
-│   │   │       ├── Drivers.jsx
-│   │   │       ├── Assignments.jsx
-│   │   │       └── ActivityLog.jsx
+│   │   │       ├── Users.jsx           # User management: admins, drivers, parents
+│   │   │       ├── Buses.jsx           # Bus CRUD + driver assignment
+│   │   │       ├── Students.jsx        # Student table + geospatial map workspace
+│   │   │       └── ActivityLog.jsx     # Communication + activity log with filters
 │   │   ├── components/
+│   │   │   └── MapWorkspace.jsx        # Leaflet.js map: pin placement, geofence circles
 │   │   ├── services/
 │   │   │   └── api.js
 │   │   ├── context/
@@ -250,7 +248,8 @@ awabus/
 - Node.js v18+
 - MongoDB Atlas account (free tier works)
 - Arkesel API account (for voice, SMS, and IVR)
-- Android device or emulator (for driver and parent apps)
+- Hubtel account (for SMS second-level fallback; optional but recommended)
+- Android device or emulator (for driver app)
 - Expo CLI: `npm install -g expo-cli`
 
 ### 1. Clone the Repository
@@ -270,7 +269,7 @@ cp ../.env.example .env
 npm run dev
 ```
 
-### 3. Set Up the Web Client (Parent PWA + Admin Dashboard)
+### 3. Set Up the Admin Web Portal
 
 ```bash
 cd client-web
@@ -285,19 +284,10 @@ cd client-driver
 npm install
 npx expo start
 # Scan QR code with Expo Go on your Android device
+# Grant "Always Allow" location permission when prompted — required for background GPS
 ```
 
-### 5. Set Up the Parent Mobile App
-
-```bash
-cd client-parent
-npm install
-npx expo start
-# Scan QR code with Expo Go on your Android device
-# Uses the same backend as the PWA — log in with the same parent credentials
-```
-
-> **Note:** The parent mobile app and the parent PWA share the same backend API and database. A parent can toggle attendance on the PWA and the change reflects instantly in the mobile app via Socket.io — and vice versa.
+> **Note:** Background location ("Always Allow") must be granted before the driver can start a trip. The app enforces this at the OS prompt level and disables the "Start Trip" button until permission is confirmed.
 
 ---
 
@@ -314,7 +304,7 @@ NODE_ENV=development
 MONGO_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/awabus
 
 # JWT
-JWT_SECRET=your_jwt_secret_here
+JWT_SECRET=your_jwt_secret_here_min_32_chars
 JWT_EXPIRES_IN=7d
 
 # Arkesel API
@@ -322,8 +312,9 @@ ARKESEL_API_KEY=your_arkesel_api_key
 ARKESEL_SENDER_ID=AwaBus
 ARKESEL_IVR_NUMBER=+233XXXXXXXXX
 ARKESEL_BASE_URL=https://sms.arkesel.com/api/v2
+ARKESEL_WEBHOOK_SECRET=your_shared_webhook_secret
 
-# Hubtel (SMS fallback)
+# Hubtel (SMS second-level fallback)
 HUBTEL_CLIENT_ID=your_hubtel_client_id
 HUBTEL_CLIENT_SECRET=your_hubtel_client_secret
 HUBTEL_SENDER_ID=AwaBus
@@ -332,9 +323,12 @@ HUBTEL_SENDER_ID=AwaBus
 DEFAULT_GEOFENCE_RADIUS_METRES=500
 GPS_PING_INTERVAL_SECONDS=10
 
-# Frontend URLs (for CORS — all three accepted)
-CLIENT_WEB_URL=http://localhost:5173
-CLIENT_PARENT_APP_URL=exp://localhost:8082
+# Attendance
+ATTENDANCE_CUTOFF_TIME=06:30
+
+# Frontend URLs (for CORS)
+CLIENT_WEB_URL=https://awabus.vercel.app
+CLIENT_DRIVER_APP_URL=exp://localhost:8081
 ```
 
 ---
@@ -345,43 +339,64 @@ CLIENT_PARENT_APP_URL=exp://localhost:8082
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| POST | `/api/auth/register` | Public | Register a user (admin creates driver/parent accounts) |
-| POST | `/api/auth/login` | Public | Login, returns JWT |
-| POST | `/api/auth/refresh` | Auth | Refresh JWT |
+| POST | `/api/auth/register` | Admin | Create a user (admin, driver, or parent) |
+| POST | `/api/auth/login` | Public | Login with phone + password; returns JWT |
+| POST | `/api/auth/refresh` | Auth | Refresh JWT (rate limited: 10/hr/user) |
+| POST | `/api/auth/forgot-password` | Public | Initiate SMS OTP flow |
+| POST | `/api/auth/verify-otp` | Public | Validate OTP; returns short-lived reset token |
+| POST | `/api/auth/reset-password` | Public | Set new password using reset token |
 
-### Trips (Driver)
+### Users (Admin)
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| POST | `/api/trips/start` | Driver | Initiate a trip, returns tripId |
-| POST | `/api/trips/ping` | Driver | Send GPS coordinates `{ tripId, lat, lng }` |
-| POST | `/api/trips/end` | Driver | Mark trip as Completed |
-| POST | `/api/trips/broadcast` | Driver | Send delay broadcast to all parents on route |
+| GET | `/api/users` | Admin | Paginated, filterable user list |
+| PUT | `/api/users/:id` | Admin | Update name, phone, role, status |
+| PATCH | `/api/users/:id/status` | Admin | Suspend or reactivate user |
+| DELETE | `/api/users/:id` | Admin | Hard or soft delete (based on history) |
+
+### Buses (Admin)
+
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| GET | `/api/buses` | Admin | List all buses |
+| POST | `/api/buses` | Admin | Create bus |
+| PUT | `/api/buses/:id` | Admin | Update bus details |
+| PATCH | `/api/buses/:id/assign-driver` | Admin | Assign driver to bus |
+| DELETE | `/api/buses/:id` | Admin | Delete bus (only if unassigned + no trips) |
 
 ### Students (Admin)
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
 | GET | `/api/students` | Admin | List all students |
-| POST | `/api/students` | Admin | Create student |
-| PUT | `/api/students/:id` | Admin | Update student |
-| DELETE | `/api/students/:id` | Admin | Delete student |
-| POST | `/api/students/:id/assign` | Admin | Assign student to driver |
+| POST | `/api/students` | Admin | Create student with geofence coordinates |
+| PUT | `/api/students/:id` | Admin | Update student (incl. coordinate drag-drop) |
+| DELETE | `/api/students/:id` | Admin | Hard or soft delete (based on history) |
 
-### Parents
-
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| GET | `/api/parents/ward-status` | Parent | Get ward's current trip status |
-| POST | `/api/parents/attendance` | Parent | Toggle ward attendance for session |
-| POST | `/api/parents/secondary-receiver` | Parent | Set secondary receiver + expiry |
-
-### IVR Webhook
+### Trips (Driver)
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| POST | `/api/ivr/inbound` | Arkesel (webhook) | Handle inbound IVR call events |
-| POST | `/api/ivr/dtmf` | Arkesel (webhook) | Handle DTMF keypress events |
+| GET | `/api/drivers/me/route` | Driver | Get assigned bus + student list for today |
+| POST | `/api/trips/start` | Driver | Initiate trip; creates TripStudent records |
+| POST | `/api/trips/ping` | Driver | Stream GPS coordinate `{ tripId, lat, lng, timestamp }` |
+| POST | `/api/trips/end` | Driver | Mark trip Completed; resolve pending students |
+| POST | `/api/trips/broadcast` | Driver | Send delay SMS broadcast to attending parents |
+
+### IVR Webhooks
+
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| POST | `/api/ivr/inbound` | Arkesel (webhook) | Handle inbound IVR call; caller ID lookup |
+| POST | `/api/ivr/dtmf` | Arkesel (webhook) | Handle DTMF keypress events; route actions |
+| POST | `/api/ivr/voice-callback` | Arkesel (webhook) | Receive call outcome; trigger SMS fallback if failed |
+
+### Logs (Admin)
+
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| GET | `/api/logs` | Admin | Paginated, filterable communication + activity log |
 
 ---
 
@@ -391,10 +406,29 @@ CLIENT_PARENT_APP_URL=exp://localhost:8082
 ```js
 {
   name: String,
-  phone: { type: String, unique: true },
-  passwordHash: String,
-  ivrPinHash: String,
+  phone: { type: String, unique: true },          // E.164 format
+  passwordHash: String,                            // bcrypt, 12 salt rounds (admins + drivers only)
+  ivrPinHash: String,                              // bcrypt, 10 salt rounds (parents only)
   role: { type: String, enum: ['driver', 'parent', 'admin'] },
+  status: { type: String, enum: ['active', 'suspended', 'deleted'] },
+  mustChangePassword: { type: Boolean, default: true },
+  assignedBusId: { type: ObjectId, ref: 'Bus' },  // drivers only
+  loginAttempts: Number,
+  lockoutUntil: Date,
+  passwordChangedAt: Date,
+  createdAt: Date,
+  updatedAt: Date
+}
+```
+
+### Bus
+```js
+{
+  registrationNumber: { type: String, unique: true },
+  nickname: String,
+  capacity: Number,
+  assignedDriverUserId: { type: ObjectId, ref: 'User', default: null },
+  status: { type: String, enum: ['Idle', 'Active Trip', 'Maintenance'] },
   createdAt: Date
 }
 ```
@@ -403,42 +437,64 @@ CLIENT_PARENT_APP_URL=exp://localhost:8082
 ```js
 {
   name: String,
-  homeLatitude: Number,
-  homeLongitude: Number,
   parentUserId: { type: ObjectId, ref: 'User' },
-  driverUserId: { type: ObjectId, ref: 'User' },
-  geofenceRadius: { type: Number, default: 500 },
-  active: { type: Boolean, default: true }
+  driverUserId: { type: ObjectId, ref: 'User', index: true },
+  homeLatitude: { type: Number, required: true },
+  homeLongitude: { type: Number, required: true },
+  geofenceRadius: { type: Number, default: 500 },   // metres; 100–2000
+  active: { type: Boolean, default: true },
+  createdAt: Date,
+  updatedAt: Date
 }
 ```
 
 ### Trip
 ```js
 {
-  driverUserId: { type: ObjectId, ref: 'User' },
+  driverUserId: { type: ObjectId, ref: 'User', index: true },
+  busId: { type: ObjectId, ref: 'Bus' },
   startTime: Date,
   endTime: Date,
-  status: { type: String, enum: ['Idle', 'Active', 'Completed'] }
+  status: { type: String, enum: ['Active', 'Completed'], index: true },
+  delayBroadcastLog: [{ timestamp: Date, delayMinutes: Number, recipientCount: Number }]
 }
 ```
 
 ### TripStudent
 ```js
 {
-  tripId: { type: ObjectId, ref: 'Trip' },
+  tripId: { type: ObjectId, ref: 'Trip', index: true },
   studentId: { type: ObjectId, ref: 'Student' },
   attending: { type: Boolean, default: true },
-  alertTriggered: { type: Boolean, default: false },
-  alertTimestamp: Date
+  alertTriggered: { type: Boolean, default: false },  // write-once; NEVER set back to false
+  alertTimestamp: Date,
+  manuallyResolved: { type: Boolean, default: false },
+  createdAt: Date
 }
+// COMPOUND INDEX: { tripId, attending, alertTriggered }
+```
+
+### DailyAttendance
+```js
+{
+  studentId: { type: ObjectId, ref: 'Student' },
+  date: Date,
+  attending: Boolean,
+  updatedByIVR: { type: Boolean, default: false },
+  timestamp: Date,
+  updatedAt: Date
+}
+// UNIQUE INDEX: { studentId, date }
 ```
 
 ### SecondaryReceiver
 ```js
 {
   parentUserId: { type: ObjectId, ref: 'User' },
-  phone: String,
-  expiresAt: Date
+  studentId: { type: ObjectId, ref: 'Student' },
+  phone: String,                                  // E.164
+  expiresAt: Date,                                // TTL index
+  createdAt: Date
 }
 ```
 
@@ -446,10 +502,44 @@ CLIENT_PARENT_APP_URL=exp://localhost:8082
 ```js
 {
   tripStudentId: { type: ObjectId, ref: 'TripStudent' },
+  studentId: { type: ObjectId, ref: 'Student' },
+  driverId: { type: ObjectId, ref: 'User' },
+  parentUserId: { type: ObjectId, ref: 'User' },
   type: { type: String, enum: ['proximity_alert', 'sms_fallback', 'ivr_cancellation', 'ivr_bridge', 'delay_broadcast'] },
   channel: { type: String, enum: ['voice', 'sms', 'ivr'] },
   status: { type: String, enum: ['sent', 'delivered', 'failed'] },
   recipientPhone: String,
+  arkeselResponseCode: String,
+  hubtelResponseCode: String,
+  retryCount: Number,
+  failureReason: String,
+  arkeselCallId: String,
+  arkeselSessionId: String,
+  timestamp: Date
+}
+// APPEND-ONLY — log entries are never updated or deleted
+```
+
+### AuthLog
+```js
+{
+  userId: { type: ObjectId, ref: 'User' },
+  ip: String,
+  userAgent: String,
+  channel: { type: String, enum: ['web', 'driver_app', 'ivr'] },
+  success: Boolean,
+  timestamp: Date
+}
+```
+
+### PasswordReset
+```js
+{
+  userId: { type: ObjectId, ref: 'User' },
+  otpHash: String,                  // bcrypt
+  expiresAt: Date,                  // TTL index (5 minutes)
+  used: Boolean,
+  otpAttempts: Number,
   timestamp: Date
 }
 ```
@@ -469,16 +559,22 @@ npm test
 
 | Area | Method | Tool |
 |---|---|---|
-| Haversine distance calculation | Unit test | Jest |
-| Geofence threshold (trigger / no-trigger) | Unit test | Jest |
-| Trip state machine transitions | Unit test | Jest |
-| IVR Caller ID lookup and PIN verification | Unit test | Jest |
-| Communication engine (voice → SMS fallback) | Unit test | Jest |
-| All REST API endpoints | Integration test | Supertest |
-| IVR webhook routing (press-1, press-2, post-deadline) | Integration test | Supertest |
-| Full end-to-end workflow | System test | Manual |
-| Geofence accuracy at 200m–800m | Accuracy test | Mock GPS coords |
-| Driver app, Parent PWA, Parent mobile app, Admin dashboard | Usability study | SUS questionnaire |
+| Haversine ±1m accuracy at 500m | Unit test | Jest |
+| Geofence triggers at exactly 500m | Unit test | Jest |
+| Geofence does not trigger at 510m | Unit test | Jest |
+| Duplicate alert prevented by `alertTriggered` flag | Unit test | Jest |
+| Cannot start second active trip (409 Conflict) | Unit test | Jest |
+| `SecondaryReceiver` TTL expiry → reverts to primary | Unit test | Jest |
+| Attendance toggle blocked after 06:30 AM | Integration test | Supertest |
+| IVR Press 1 after cutoff: no DB mutation, voice rejection | Integration test | Supertest |
+| IVR Press 2: driver bridge call initiated | Integration test | Supertest |
+| IVR PIN: 3 failures → session blocked | Integration test | Supertest |
+| Voice call failure triggers SMS fallback | Integration test | Supertest |
+| Broadcast deduplicates multi-student parent | Integration test | Supertest |
+| JWT expired → 401, redirect to login | Integration test | Supertest |
+| Full end-to-end trip workflow | System test | Manual |
+| Geofence accuracy across 200m–800m | Accuracy test | Mock GPS coords |
+| Driver app, Admin portal | Usability study | SUS questionnaire |
 
 ### Geofence Accuracy Test Coordinates
 
@@ -489,7 +585,7 @@ Simulated distances from a fixed test student home coordinate:
 | 200m | Alert triggers ✅ |
 | 400m | Alert triggers ✅ |
 | 490m | Alert triggers ✅ |
-| 500m | Alert triggers ✅ |
+| 500m | Alert triggers ✅ (inclusive boundary) |
 | 510m | No alert ❌ |
 | 600m | No alert ❌ |
 | 800m | No alert ❌ |
@@ -501,39 +597,32 @@ Simulated distances from a fixed test student home coordinate:
 | Service | Platform | Notes |
 |---|---|---|
 | Backend API | Railway | Free tier for prototype |
-| Parent + Admin PWA | Vercel | Free tier |
+| Admin Web Portal | Vercel | Free tier |
 | Driver Android App | Expo EAS Build | APK for direct install during testing |
-| Parent Android App | Expo EAS Build | APK for direct install during testing |
 | MongoDB | MongoDB Atlas | Free M0 cluster |
 | IVR + Voice + SMS | Arkesel | Paid per API credit |
+| SMS Fallback | Hubtel | Paid per SMS |
 
 ### Deploy Backend to Railway
 
 ```bash
-# Install Railway CLI
 npm install -g @railway/cli
-
 railway login
 railway init
 railway up
 ```
 
-### Deploy Frontend PWA to Vercel
+### Deploy Admin Portal to Vercel
 
 ```bash
 cd client-web
 npx vercel --prod
 ```
 
-### Build Android APKs via Expo EAS
+### Build Driver App APK via Expo EAS
 
 ```bash
-# Driver app
 cd client-driver
-npx eas build --platform android --profile preview
-
-# Parent app
-cd client-parent
 npx eas build --platform android --profile preview
 ```
 
@@ -545,7 +634,7 @@ npx eas build --platform android --profile preview
 |---|---|
 | Internet / Data Bundles | GHS 250 |
 | Arkesel API Credits (Voice, SMS, IVR) | GHS 250 |
-| Cloud Hosting (Railway/Render) | GHS 150 |
+| Cloud Hosting (Railway/Vercel) | GHS 150 |
 | Miscellaneous / Contingency | GHS 70 |
 | **Total** | **GHS 720** |
 
@@ -568,7 +657,8 @@ npx eas build --platform android --profile preview
 ## Acknowledgements
 
 - [Arkesel](https://arkesel.com) — Voice Call, SMS, and IVR APIs for Ghana
-- [Expo](https://expo.dev) — React Native toolchain for Android foreground GPS
+- [Expo](https://expo.dev) — React Native toolchain for Android background GPS
+- [Leaflet.js](https://leafletjs.com) — Open-source interactive maps (Admin Portal)
 - [MongoDB Atlas](https://www.mongodb.com/atlas) — Cloud database
 - [Railway](https://railway.app) — Backend hosting
 
