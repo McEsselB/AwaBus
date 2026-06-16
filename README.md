@@ -247,7 +247,7 @@ awabus/
 
 ```bash
 git clone https://github.com/McEsselB/AwaBus.git
-cd awabus
+cd AwaBus
 ```
 
 ### 2. Set Up the Backend
