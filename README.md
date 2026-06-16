@@ -246,7 +246,7 @@ awabus/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-org/awabus.git
+git clone https://github.com/McEsselB/AwaBus.git
 cd awabus
 ```
 
