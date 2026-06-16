@@ -34,12 +34,10 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 1. Driver opens the Android app and initiates a trip with one tap
 2. The app streams GPS coordinates to the backend every 10 seconds via a background foreground service
 3. The backend runs a Haversine geofence check against every active student's drop-off coordinates on each GPS ping
-4. When the bus enters the configured radius, an automated voice call fires to the parent (or secondary receiver) via Arkesel
-5. If the call fails, an SMS fallback is dispatched immediately; if that fails, Hubtel is used as a second-level fallback
+4. When the bus enters the configured radius, an automated voice call fires to the parent via Arkesel
+5. An SMS broadcast is dispatched to all parents in situations where there is going to be a drop-off or pickup delay, which will be initiated by the driver.
 6. Parents manage attendance and connect to drivers exclusively via the **Arkesel IVR inbound channel** — a single phone call, no smartphone required
 7. Admins configure the entire system — users, buses, students, geofence coordinates — through the **Admin Web Portal**
-
-> **Scope Note:** This architecture removes the parent mobile app (React Native) and parent PWA in favour of the IVR telephony channel as the sole parent interface. The Admin Portal and Driver App are unchanged in scope.
 
 ---
 
@@ -50,7 +48,6 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 - Per-student configurable geofence radius (100m–2000m; default 500m)
 - Inclusive boundary trigger: student exactly at the radius boundary receives an alert
 - One-time alert trigger per student per trip (write-once `alertTriggered` flag, never reversed)
-- Secondary receiver logic: if an active secondary receiver is set for a parent, the voice call routes to them instead; SMS confirmation goes to the primary parent
 
 ### 🚗 Driver Android App
 - Background GPS foreground service (`expo-task-manager`) that streams continuously even when the phone is locked or the app is minimised
@@ -79,7 +76,6 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 
 ### 📣 Outbound Voice & SMS
 - Arkesel Voice API for proximity alerts with automatic Arkesel SMS fallback
-- Hubtel SMS as second-level fallback if Arkesel SMS fails
 - Delay broadcast to all attending parents with deduplication (parent with multiple children on the same route receives one message, not two)
 - `Promise.allSettled` async dispatch — driver's request returns immediately with a queued confirmation
 
@@ -120,10 +116,6 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 │ (Voice / SMS / IVR)   │
 └──────────────────────┘
 
-┌──────────────────────┐    SMS Fallback
-│   Hubtel API          │ ◀──────────────────────
-│ (SMS second-level)    │
-└──────────────────────┘
 
          ┌──────────────────────────────────────────────────────────────────┐
          │                  Parent Interface — IVR Only                      │
@@ -146,7 +138,7 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 | Database | MongoDB Atlas (Mongoose ODM) |
 | Real-time | Socket.io (driver app + admin portal only) |
 | Map (Admin) | Leaflet.js + OpenStreetMap (no paid APIs) |
-| Communication | Arkesel API (Voice Call, SMS, IVR); Hubtel (SMS second-level fallback) |
+| Communication | Arkesel API (Voice Call, SMS, IVR) |
 | Geofence Logic | Haversine formula (pure Node.js) |
 | Authentication | JWT (stateless), bcrypt (passwords + IVR PINs) |
 | Rate Limiting | express-rate-limit |
@@ -192,7 +184,7 @@ awabus/
 │   │   └── ivrSignature.js         # X-Arkesel-Signature webhook validation
 │   ├── services/
 │   │   ├── geofenceEngine.js       # Haversine + threshold logic; alert trigger orchestration
-│   │   ├── communicationEngine.js  # Voice call → Arkesel SMS → Hubtel SMS fallback chain
+│   │   ├── communicationEngine.js  # Voice call → Arkesel SMS
 │   │   ├── ivrService.js           # Caller ID lookup, PIN verify, DTMF routing, Arkesel responses
 │   │   └── broadcastService.js     # Bulk SMS with deduplication + Promise.allSettled dispatch
 │   ├── utils/
@@ -248,7 +240,6 @@ awabus/
 - Node.js v18+
 - MongoDB Atlas account (free tier works)
 - Arkesel API account (for voice, SMS, and IVR)
-- Hubtel account (for SMS second-level fallback; optional but recommended)
 - Android device or emulator (for driver app)
 - Expo CLI: `npm install -g expo-cli`
 
@@ -313,11 +304,6 @@ ARKESEL_SENDER_ID=AwaBus
 ARKESEL_IVR_NUMBER=+233XXXXXXXXX
 ARKESEL_BASE_URL=https://sms.arkesel.com/api/v2
 ARKESEL_WEBHOOK_SECRET=your_shared_webhook_secret
-
-# Hubtel (SMS second-level fallback)
-HUBTEL_CLIENT_ID=your_hubtel_client_id
-HUBTEL_CLIENT_SECRET=your_hubtel_client_secret
-HUBTEL_SENDER_ID=AwaBus
 
 # Geofence
 DEFAULT_GEOFENCE_RADIUS_METRES=500
@@ -487,17 +473,6 @@ CLIENT_DRIVER_APP_URL=exp://localhost:8081
 // UNIQUE INDEX: { studentId, date }
 ```
 
-### SecondaryReceiver
-```js
-{
-  parentUserId: { type: ObjectId, ref: 'User' },
-  studentId: { type: ObjectId, ref: 'Student' },
-  phone: String,                                  // E.164
-  expiresAt: Date,                                // TTL index
-  createdAt: Date
-}
-```
-
 ### CommunicationLog
 ```js
 {
@@ -510,7 +485,6 @@ CLIENT_DRIVER_APP_URL=exp://localhost:8081
   status: { type: String, enum: ['sent', 'delivered', 'failed'] },
   recipientPhone: String,
   arkeselResponseCode: String,
-  hubtelResponseCode: String,
   retryCount: Number,
   failureReason: String,
   arkeselCallId: String,
@@ -564,7 +538,6 @@ npm test
 | Geofence does not trigger at 510m | Unit test | Jest |
 | Duplicate alert prevented by `alertTriggered` flag | Unit test | Jest |
 | Cannot start second active trip (409 Conflict) | Unit test | Jest |
-| `SecondaryReceiver` TTL expiry → reverts to primary | Unit test | Jest |
 | Attendance toggle blocked after 06:30 AM | Integration test | Supertest |
 | IVR Press 1 after cutoff: no DB mutation, voice rejection | Integration test | Supertest |
 | IVR Press 2: driver bridge call initiated | Integration test | Supertest |
@@ -601,7 +574,7 @@ Simulated distances from a fixed test student home coordinate:
 | Driver Android App | Expo EAS Build | APK for direct install during testing |
 | MongoDB | MongoDB Atlas | Free M0 cluster |
 | IVR + Voice + SMS | Arkesel | Paid per API credit |
-| SMS Fallback | Hubtel | Paid per SMS |
+
 
 ### Deploy Backend to Railway
 
