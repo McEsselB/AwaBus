@@ -77,10 +77,11 @@ export default function Buses() {
         toast.success('Bus updated.')
       } else {
         const { data } = await api.post('/buses', form)
-        if (form.assignedDriverUserId) {
-          await api.patch(`/buses/${data._id}/assign-driver`, {
+        const busId = data.bus?._id || data._id   // handle both response shapes
+        if (form.assignedDriverUserId && busId) {
+        await api.patch(`/buses/${busId}/assign-driver`, {
             driverUserId: form.assignedDriverUserId
-          })
+        })
         }
         toast.success('Bus created.')
       }

@@ -6,8 +6,10 @@ const morgan = require('morgan')
 
 const authRoutes    = require('./routes/auth.js')
 const userRoutes    = require('./routes/users.js')
-// const busRoutes     = require('./routes/buses')
-// const studentRoutes = require('./routes/students')
+const busRoutes     = require('./routes/buses')
+const studentRoutes = require('./routes/students')
+const driverRoutes  = require('./routes/drivers.js')
+const tripRoutes    = require('./routes/trips.js')
 
 const app = express()
 
@@ -27,8 +29,10 @@ if (process.env.NODE_ENV !== 'production') {
 // ── Routes ──
 app.use('/api/auth',     authRoutes)
 app.use('/api/users',    userRoutes)
-// app.use('/api/buses',    busRoutes)
-// app.use('/api/students', studentRoutes)
+app.use('/api/buses',    busRoutes)
+app.use('/api/students', studentRoutes)
+app.use('/api/drivers', driverRoutes)
+app.use('/api/trips', tripRoutes)
 
 // ── Health check ──
 app.get('/api/health', (req, res) => {
