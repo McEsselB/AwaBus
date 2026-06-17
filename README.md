@@ -246,8 +246,8 @@ awabus/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-org/awabus.git
-cd awabus
+git clone https://github.com/McEsselB/AwaBus.git
+cd AwaBus
 ```
 
 ### 2. Set Up the Backend
