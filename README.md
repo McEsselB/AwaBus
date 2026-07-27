@@ -2,7 +2,7 @@
 
 > **Geofence-Triggered Automated Proximity Alert and Communication System for School Transport in Ghana**
 
-A school bus proximity alert system purpose-built for the Ghanaian school transport ecosystem. When a school bus enters a configurable radius around a child's drop-off point, AwaBus automatically triggers a voice call (robocall) to the parent — no smartphone, no data connection, no app required on the parent's end.
+A school bus proximity alert system purpose-built for the Ghanaian school transport ecosystem. When a school bus enters a configurable radius around a child's drop-off point, AwaBus automatically triggers a voice call (robocall) to the parent, no smartphone, no data connection, no app required on the parent's end.
 
 The system is built around three components: a **React Native Driver Android App**, a **React.js Admin Web Portal**, and an **Arkesel IVR telephony channel** as the exclusive parent interface. Parents on any phone — basic or smart — are fully served by the IVR dial-in channel for both inbound actions and outbound alerts.
 
