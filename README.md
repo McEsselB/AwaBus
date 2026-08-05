@@ -71,17 +71,16 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 
 - Dedicated school dial-in number powered by Arkesel
 - Caller ID recognition: registered parents are greeted by ward name automatically
-- Unrecognised numbers prompted to enter their registered phone number and 4-digit PIN
+- Unrecognised numbers are told to call back from their registered phone number
 - **Press 1** → cancel ward's bus seat for today (blocked after 06:30 AM Ghana Standard Time)
-- **Press 2** → bridge call directly to the driver; automatic fallback message if driver unreachable within 30 seconds
+- **Press 2** → bridge call directly to the driver
 - Multi-student support: parents with multiple wards on different routes are prompted to select a student first
-- PIN security: bcrypt-hashed 4-digit PIN; maximum 3 attempts per IVR session before disconnection
 - All webhook events validated via `X-Arkesel-Signature` shared secret
 
 ### 📣 Outbound Voice & SMS
 
-- Arkesel Voice API for proximity alerts with automatic Arkesel SMS fallback
-- Delay broadcast to all attending parents with deduplication (parent with multiple children on the same route receives one message, not two)
+- Arkesel Voice API for proximity alerts (voice-call only, no SMS fallback)
+- Delay broadcast to all attending parents via SMS with deduplication (parent with multiple children on the same route receives one message, not two)
 - `Promise.allSettled` async dispatch — driver's request returns immediately with a queued confirmation
 
 ---
@@ -102,7 +101,7 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
                                                   │                  ▼                   │
                                                   │   ┌──────────────────────────────┐  │
                                                   │   │    Communication Engine      │  │
-                                                  │   │  Voice → SMS → Hubtel        │  │
+                                                  │   │  Voice Calls · SMS Broadcasts│  │
                                                   │   └──────────────┬───────────────┘  │
                                                   │                  │                   │
                                                   │                  ▼                   │
@@ -145,7 +144,7 @@ AwaBus addresses a safety-critical gap in Ghanaian school transport: no structur
 | Map (Admin)       | Leaflet.js + OpenStreetMap (no paid APIs)                                           |
 | Communication     | Arkesel API (Voice Call, SMS, IVR)                                                  |
 | Geofence Logic    | Haversine formula (pure Node.js)                                                    |
-| Authentication    | JWT (stateless), bcrypt (passwords + IVR PINs)                                      |
+| Authentication    | JWT (stateless), bcrypt (passwords)                                                 |
 | Rate Limiting     | express-rate-limit                                                                  |
 | Testing           | Jest, Supertest                                                                     |
 | Hosting           | Railway (backend), Vercel (admin portal), Expo EAS (driver app), MongoDB Atlas (DB) |
@@ -171,7 +170,7 @@ awabus/
 │   │   ├── DailyAttendance.js      # IVR attendance cancellations; unique (studentId + date)
 │   │   ├── SecondaryReceiver.js    # Temp alternate contact with TTL expiry
 │   │   ├── CommunicationLog.js     # Append-only voice/SMS/IVR event records
-│   │   ├── AuthLog.js              # Login + IVR PIN attempt audit log
+│   │   ├── AuthLog.js              # Login audit log
 │   │   └── PasswordReset.js        # OTP documents with TTL index
 │   ├── routes/
 │   │   ├── auth.js                 # Register, login, refresh, OTP forgot-password, reset
@@ -189,8 +188,8 @@ awabus/
 │   │   └── ivrSignature.js         # X-Arkesel-Signature webhook validation
 │   ├── services/
 │   │   ├── geofenceEngine.js       # Haversine + threshold logic; alert trigger orchestration
-│   │   ├── communicationEngine.js  # Voice call → Arkesel SMS
-│   │   ├── ivrService.js           # Caller ID lookup, PIN verify, DTMF routing, Arkesel responses
+│   │   ├── communicationEngine.js  # Arkesel Voice API dispatch for proximity alerts
+│   │   ├── ivrService.js           # Caller ID lookup, DTMF routing, Arkesel responses
 │   │   └── broadcastService.js     # Bulk SMS with deduplication + Promise.allSettled dispatch
 │   ├── utils/
 │   │   └── haversine.js            # Pure Haversine distance calculation (returns metres)
@@ -377,11 +376,11 @@ CLIENT_DRIVER_APP_URL=exp://localhost:8081
 
 ### IVR Webhooks
 
-| Method | Endpoint                  | Access            | Description                                          |
-| ------ | ------------------------- | ----------------- | ---------------------------------------------------- |
-| POST   | `/api/ivr/inbound`        | Arkesel (webhook) | Handle inbound IVR call; caller ID lookup            |
-| POST   | `/api/ivr/dtmf`           | Arkesel (webhook) | Handle DTMF keypress events; route actions           |
-| POST   | `/api/ivr/voice-callback` | Arkesel (webhook) | Receive call outcome; trigger SMS fallback if failed |
+| Method | Endpoint                  | Access            | Description                                |
+| ------ | ------------------------- | ----------------- | ------------------------------------------ |
+| POST   | `/api/ivr/inbound`        | Arkesel (webhook) | Handle inbound IVR call; caller ID lookup  |
+| POST   | `/api/ivr/dtmf`           | Arkesel (webhook) | Handle DTMF keypress events; route actions |
+| POST   | `/api/ivr/voice-callback` | Arkesel (webhook) | Receive call outcome; log delivery status  |
 
 ### Logs (Admin)
 
@@ -400,7 +399,6 @@ CLIENT_DRIVER_APP_URL=exp://localhost:8081
   name: String,
   phone: { type: String, unique: true },          // E.164 format
   passwordHash: String,                            // bcrypt, 12 salt rounds (admins + drivers only)
-  ivrPinHash: String,                              // bcrypt, 10 salt rounds (parents only)
   role: { type: String, enum: ['driver', 'parent', 'admin'] },
   status: { type: String, enum: ['active', 'suspended', 'deleted'] },
   mustChangePassword: { type: Boolean, default: true },
@@ -492,7 +490,7 @@ CLIENT_DRIVER_APP_URL=exp://localhost:8081
   studentId: { type: ObjectId, ref: 'Student' },
   driverId: { type: ObjectId, ref: 'User' },
   parentUserId: { type: ObjectId, ref: 'User' },
-  type: { type: String, enum: ['proximity_alert', 'sms_fallback', 'ivr_cancellation', 'ivr_bridge', 'delay_broadcast'] },
+  type: { type: String, enum: ['proximity_alert', 'ivr_cancellation', 'ivr_bridge', 'delay_broadcast'] },
   channel: { type: String, enum: ['voice', 'sms', 'ivr'] },
   status: { type: String, enum: ['sent', 'delivered', 'failed'] },
   recipientPhone: String,
@@ -555,8 +553,6 @@ npm test
 | Attendance toggle blocked after 06:30 AM                  | Integration test | Supertest         |
 | IVR Press 1 after cutoff: no DB mutation, voice rejection | Integration test | Supertest         |
 | IVR Press 2: driver bridge call initiated                 | Integration test | Supertest         |
-| IVR PIN: 3 failures → session blocked                     | Integration test | Supertest         |
-| Voice call failure triggers SMS fallback                  | Integration test | Supertest         |
 | Broadcast deduplicates multi-student parent               | Integration test | Supertest         |
 | JWT expired → 401, redirect to login                      | Integration test | Supertest         |
 | Full end-to-end trip workflow                             | System test      | Manual            |
